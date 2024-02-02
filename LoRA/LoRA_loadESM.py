@@ -3,7 +3,6 @@ import esm
 import torch
 import re
 from esm.model.esm2 import ESM2
-torch.hub.set_dir("/nfs/gengyla/.cache/torch/hub")
 
 
 # print(model_data.keys())

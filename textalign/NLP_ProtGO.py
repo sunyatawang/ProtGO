@@ -3,8 +3,6 @@ import os
 
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 # os.environ['CUDA_VISIBLE_DEVICES'] = '1'
-os.environ['TORCH_HOME'] = '/nfs_beijing_ai/boyan'
-os.environ["TRANSFORMERS_CACHE"] = "/nfs_beijing_ai/boyan/hub/huggingface"
 os.environ["WANDB_DISABLED"] = "true"
 
 import torch
@@ -55,8 +53,8 @@ from evaluation import get_leafs_idx, get_roots_idx, evaluate_prediction
 
 from transformers import AutoTokenizer, AutoModel
 
-nlp_path = '/nfs_beijing_ai/bj-common-data/ods/huggingface/michiyasunaga/BioLinkBERT-large/'
-# nlp_path = '/nfs_beijing_ai/bj-common-data/ods/huggingface/microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract/'
+nlp_path = '/BioLinkBERT-large/'
+# nlp_path = 'microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract/'
 nlp_tokenizer = AutoTokenizer.from_pretrained(nlp_path)
 nlp_model = AutoModel.from_pretrained(nlp_path)
 nlp_dim = 1024
@@ -102,26 +100,25 @@ embed_dim = 640
 model.cuda()
 model.eval()
 
-train_path = "/nfs_beijing_ai/boyan/Kaggle/FunP/kaggle_train_0.9.txt"
-# valid_path = "/mnt/yrfs/gongjing/finetune_100b/datasets/TemStaPro/TemStaPro-Minor-bal65-validation.label.fasta"
-test_path = "/nfs_beijing_ai/boyan/Kaggle/FunP/kaggle_test_0.9.txt"
-output_path = "/nfs_beijing_ai/boyan/eval/kaggle/function"
-# predict_path = '/nfs_beijing_ai/boyan/Kaggle/FunP/Test (Targets)/testsuperset2.fasta'
-# embed_path = "/nfs/wby/data/Ankh/StaP_K50/embedding"
+train_path = "Kaggle/FunP/kaggle_train_0.9.txt"
+test_path = "Kaggle/FunP/kaggle_test_0.9.txt"
+output_path = "eval/kaggle/function"
+# predict_path = '/Kaggle/FunP/Test (Targets)/testsuperset2.fasta'
 
 label_space = {
     'biological_process': set(),
     'molecular_function': set(),
     'cellular_component': set()
 }
-obo_path = '/nfs_beijing_ai/boyan/Kaggle/FunP/Train/go-basic.obo'
-ia_path = '/nfs_beijing_ai/boyan/Kaggle/FunP/IA.txt'
+obo_path = 'Kaggle/FunP/Train/go-basic.obo'
+ia_path = 'Kaggle/FunP/IA.txt'
 
 enc = preprocessing.LabelEncoder()
 # MAXLEN = 7000
-MAXLEN = 6000
+# MAXLEN = 6000
+MAXLEN = 2048
 
-tax_path = '/nfs_beijing_ai/boyan/Kaggle/FunP/Train/train_taxonomy.tsv'
+tax_path = 'Kaggle/FunP/Train/train_taxonomy.tsv'
 
 
 def extract_know(filepath):
@@ -199,7 +196,6 @@ def obo_graph(filepath, dict_path):
 onto, ia_dict = obo_graph(obo_path, ia_path)
 
 
-# gt_file = '/nfs_beijing_ai/boyan/Kaggle/FunP/Train/train_terms.tsv'
 # gts = gt_parser(gt_file, onto)
 
 def parent(enc, key):
@@ -619,7 +615,6 @@ class MultimodalTransformer(nn.Module):
         self.protein_embed = protein_embed
         self.num_heads = num_heads
         self.multihead_attn = nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=num_heads)
-        # 定义额外的Transformer层
         self.transformer_layers = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=num_heads)
         self.transformer_encoder = nn.TransformerEncoder(self.transformer_layers, num_layers=num_layers)
         self.text_pos_encoder = PositionalEncoding(text_embed.size()[0], hidden_dim)
@@ -629,11 +624,8 @@ class MultimodalTransformer(nn.Module):
         # text_features = self.text_pos_encoder(self.text_embed)
         protein_features = self.protein_pos_encoder(self.protein_embed)
         # import pdb; pdb.set_trace()
-        # 将两种模态的特征拼接
         combined_features = torch.cat((self.text_embed, protein_features), dim=0)
-        # 应用多头自注意力
         attn_output, _ = self.multihead_attn(combined_features, combined_features, combined_features)
-        # 应用额外的Transformer层
         transformer_output = self.transformer_encoder(attn_output)
         return transformer_output
 
@@ -845,7 +837,7 @@ if __name__ == "__main__":
                 optimizer_model_weights = optimizer.state_dict().copy()
                 #     model_mlp.load_state_dict(best_model_weights)
 
-            ckpt_path = '/nfs_beijing_ai/boyan/ckpt/cafa5/'
+            ckpt_path = '/ckpt/cafa5/'
             ckpt_path = ckpt_path + "{}_1e-4_quickGO_BioLink_sub_esm2_t30_150M_UR50D_{}.pt".format(ctime, key)
             checkpoint = {
                 'model_state_dict': best_model_weights,
