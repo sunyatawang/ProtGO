@@ -8,4 +8,13 @@ python -m pip install ankh
 pip install SwissArmyTransformer
 ```
 
-More details are coming soon.
+## Usage
+* Linear Probing with MLP:
+```python
+python model/ProtGO_linear.py
+```
+
+* Fine-tuning with LoRA:
+```python
+python model/ProtGO_LoRA.py
+```
