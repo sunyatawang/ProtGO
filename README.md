@@ -8,6 +8,12 @@ python -m pip install ankh
 pip install SwissArmyTransformer
 ```
 
+## Datasets
+* Train set:
+/main/data/cafa5_train_1.txt + /main/data/cafa5_train_2.txt
+* Test set:
+/main/data/cafa5_test.txt
+
 ## Usage
 * Linear Probing with MLP:
 ```python
