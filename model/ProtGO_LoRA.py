@@ -21,6 +21,7 @@ import ankh
 import csv
 import pickle
 import dill
+from collections import Counter
 
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
@@ -43,8 +44,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 # import wandb
 # wandb.init(mode='offline')
 from sklearn import preprocessing
-from sklearn.metrics import roc_auc_score, matthews_corrcoef, multilabel_confusion_matrix, \
-    precision_recall_fscore_support
+from sklearn.metrics import roc_curve,auc,roc_auc_score,matthews_corrcoef,\
+    multilabel_confusion_matrix,precision_recall_fscore_support
+
 
 from graph import Graph, Prediction, propagate
 from parser import obo_parser, gt_parser, pred_parser, ia_parser
@@ -111,9 +113,9 @@ ia_path = 'data/Original/IA.txt'
 tax_path = 'data/Original/train_taxonomy.tsv'
 
 label_space = {
-    'biological_process': set(),
-    'molecular_function': set(),
-    'cellular_component': set()
+    'biological_process': [],
+    'molecular_function': [],
+    'cellular_component': []
 }
 
 enc = preprocessing.LabelEncoder()
@@ -246,7 +248,7 @@ def preprocess_dataset(filepath, max_length=MAXLEN):
                         ns = ont.namespace
                         if gene in ont.terms_dict.keys():
                             multi_labels[ns].append(tag)
-                            label_space[ns].add(tag)
+                            label_space[ns].append(tag)
                             #     index = ont.terms_dict[gene]['index']
                             continue
                 for key in multi_labels.keys():
@@ -310,27 +312,32 @@ def calACC(hypo, gold):
 
 
 def calROC(hypo, gold):
-    # print([(h, g) for h, g in zip(hypo, gold)])
-    roc = 0
-    for i in range(0, len(hypo)):
+    roc_auc = 0
+    for i in range(0,len(hypo)):
         _hypo = np.array(hypo[i].cpu())
         _gold = np.array(gold[i].cpu())
-        roc += roc_auc_score(_gold, _hypo)
-    total = len(gold)
-    return roc / total
+        if np.max(_gold)== 0 or np.max(_hypo)==0:
+            continue
+        fpr, tpr, _ = roc_curve(_gold, _hypo)
+        sample_auc = auc(fpr, tpr)
+        roc_auc += sample_auc
+    total = len(hypo)
+    return roc_auc/ total
 
 
 def calMCC(hypo, gold):
     mcc = 0
-    for i in range(0, len(hypo)):
+    for i in range(0,len(hypo)):
         _hypo = np.array(hypo[i].cpu())
         _gold = np.array(gold[i].cpu())
-        _hypo[_hypo >= 0.5] = 1
-        _hypo[_hypo < 0.5] = -1
-        _gold[_gold == 0] = -1
-        mcc = matthews_corrcoef(_gold, _hypo)
-    total = len(gold)
-    return mcc / total
+        _hypo[_hypo>=0.5] = 1
+        _hypo[_hypo<0.5] = 0
+        if np.max(_hypo) == 0 or np.max(_gold) == 0:
+            continue
+        mcc_sample = matthews_corrcoef(_gold, _hypo)
+        mcc += mcc_sample
+    total = len(hypo)
+    return mcc/ total
 
 
 def calF(hypo, gold, return_all=False):
@@ -352,8 +359,56 @@ def calF(hypo, gold, return_all=False):
     total = len(gold)
     return b_f1 / total, b_p / total, b_r / total, ma_f1 / total, mi_f1 / total
 
+def evaluate_annotations(gold, hypo):
+    """
+    Computes Fmax
+    """
+    total = 0
+    p = 0.0
+    r = 0.0
+    p_total= 0
+    prec_list=[0]
+    rec_list=[0]
+    for i in range(0,len(hypo)):
+        _hypo = np.array(hypo[i].cpu())
+        _gold = np.array(gold[i].cpu())
+        real_num = np.sum(_gold == 1)
+        _hypo[_hypo>=0.5] = 1
+        _hypo[_hypo<0.5] = 0
+        pred_num = np.sum(_hypo == 1)
+        if real_num == 0 or pred_num == 0:
+            continue
+        tpn = np.sum((_gold == 1) & (_hypo == 1))
+        fpn = np.sum((_gold == 0) & (_hypo == 1))
+        fnn = np.sum((_gold == 1) & (_hypo == 0))
+        total += 1
+        recall = tpn / (1.0 * (tpn + fnn))
+        r += recall
+        if pred_num > 0:
+            p_total += 1
+            precision = tpn / (1.0 * (tpn + fpn))
+            p += precision
+        if i % 100 == 0 or i == len(hypo)-1:
+            if p_total > 0 and total > 0:
+                prec_list.append(p/ p_total)
+                rec_list.append(r/ total)
+    if total != 0:
+        r /= total
+    if p_total > 0:
+        p /= p_total
+    f = 0.0
+    if p + r > 0:
+        f = 2 * p * r / (p + r)
+    prec_list = np.array(prec_list)
+    rec_list = np.array(rec_list)
+    sorted_index = np.argsort(rec_list)
+    rec_list = rec_list[sorted_index]
+    prec_list = prec_list[sorted_index]
+    aupr = np.trapz(prec_list, rec_list)
+    return f, p, r, aupr
+
 # pre-trained NLP models embedding
-def nlp_embedding(nlp_model, label_list, key):
+def nlp_embedding(nlp_model, label_list, key, top_list):
     print(f"Start nlp model {nlp_path}")
     match_embedding = [None for _ in range(len(label_list))]
     for index, multi_tag in enumerate(label_list):
@@ -361,6 +416,8 @@ def nlp_embedding(nlp_model, label_list, key):
             continue
         context = ''
         for _tag in multi_tag:
+            if _tag not in top_list:
+                continue
             for ont in onto:
                 if ont.namespace != key:
                     continue
@@ -374,6 +431,8 @@ def nlp_embedding(nlp_model, label_list, key):
                     #     context = context + ' ' + tag_contents[0]
                     tag_context = ont.terms_dict[_tag]['name']
                     context = context + tag_context + ' '
+        if len(context) > MAXLEN:
+            context = context[:MAXLEN]
         seq_len = 512
         num_seqs = len(context) // seq_len + (1 if len(context) % seq_len != 0 else 0)
         last_embed = []
@@ -407,24 +466,36 @@ if __name__ == "__main__":
     pred_results = {}
     metrics_output_test = {}
     for key in label_space.keys():
-        train_nlp = nlp_embedding(nlp_model, training_labels[key], key)
+        label_tops = Counter(label_space[key])
+        top_labels = [label for label in set(label_space[key]) if label_tops[label] > 21]  # 27
+        print('Top label numbers:{}'.format(len(top_labels)))
+        label_list = top_labels
+
+        train_nlp = nlp_embedding(nlp_model, training_labels[key], key, label_list)
         test_nlp = []
         for x in test_id:
             test_nlp.append(None)
 
-        label_list = list(label_space[key])
         labspace = enc.fit_transform(label_list)
         onto_parent = parent(enc, key)
         x = 0
         label_num = len(enc.classes_)
         for label in training_labels[key]:
-            temp_labels = enc.transform(label)
-            training_labels[key][x] = [1 if i in temp_labels else 0 for i in range(0, label_num)]
+            filtered_label = [item for item in label if item in label_list]
+            if len(filtered_label) == 0:
+                training_labels[key][x] = [0] * label_num
+            else:
+                temp_labels = enc.transform(filtered_label)
+                training_labels[key][x] = [1 if i in temp_labels else 0 for i in range(0, label_num)]
             x += 1
         x = 0
         for label in test_labels[key]:
-            temp_labels = enc.transform(label)
-            test_labels[key][x] = [1 if i in temp_labels else 0 for i in range(0, label_num)]
+            filtered_label = [item for item in label if item in label_list]
+            if len(filtered_label) == 0:
+                test_labels[key][x] = [0] * label_num
+            else:
+                temp_labels = enc.transform(filtered_label)
+                test_labels[key][x] = [1 if i in temp_labels else 0 for i in range(0, label_num)]
             x += 1
         ia_list = torch.ones(1, label_num)
         for _tag, _value in ia_dict.items():
@@ -483,17 +554,24 @@ if __name__ == "__main__":
         criterion = nn.BCELoss()
         e = math.e
         optimizer = torch.optim.Adam(model.parameters(), lr=4e-5)  # 1e-5 3B 4e-5 150M
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.6)
         epoch_num = 25
 
         if key not in metrics_output_test:
             metrics_output_test[key] = {
-                'acc': [],
-                'ma_f1': [],
-                'mi_f1': [],
-                'b_p': [],
-                'b_r': [],
-                'b_f1': [],
-                'w_f1': []
+                'acc':[],
+                'ma_f1':[],
+                'mi_f1':[],
+                'b_p':[],
+                'b_r':[],
+                'b_f1':[],
+                'w_f1':[],
+                'p':[],
+                'r':[],
+                'f1':[],
+                'mcc':[],
+                'aupr':[],
+                'roc':[]
             }
         best_f1 = 0
         best_model_weights = None
@@ -517,6 +595,7 @@ if __name__ == "__main__":
                     print('{}  Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}'.format(key, epoch + 1, epoch_num, i + 1,
                                                                                  len(training_dataset) // 1,
                                                                                  loss_mean / (i + 1)))
+            scheduler.step()
 
             _labels = []
             _preds = []
@@ -531,19 +610,17 @@ if __name__ == "__main__":
                     output = sigmoid(output).squeeze(0)
                     w_output = sigmoid(w_output).squeeze(0)
                     # predicted = [1 if i>0.5 else 0 for i in output]
-                    _labels.append(labels)
-                    _preds.append(output)
-                    weight_preds.append(w_output)
+                    _labels.append(labels.cpu())
+                    _preds.append(output.cpu())
+                    weight_preds.append(w_output.cpu())
             acc = calACC(_preds, _labels)
-            # auc = calROC(_preds, _labels)
-            # mcc = calMCC(_preds, _labels)
+            roc = calROC(_preds, _labels)
+            mcc = calMCC(_preds, _labels)
             b_f1, b_p, b_r, ma_f1, mi_f1 = calF(_preds, _labels)
             wb_f1, wb_p, wb_r, wma_f1, wmi_f1 = calF(weight_preds, _labels)
-            print(
-            '{}  Epoch: {}, Test w-macro-F1: {:.2f}%, Test F1:{:.2f}%, Test weight-F1:{:.2f}%'.format(key, epoch + 1,
-                                                                                                      100 * wma_f1,
-                                                                                                      100 * b_f1,
-                                                                                                      100 * wb_f1))
+            f, p, r, aupr = evaluate_annotations(_labels, _preds)
+            print('{}  Epoch: {}, Test w-macro-F1: {:.2f}%, Test F1:{:.2f}%, Test avg-F1:{:.2f}%, Test weight-F1:{:.2f}%, Test AUPR:{:.2f}%'.
+                  format(key, epoch + 1, 100 * wma_f1, 100 * b_f1, 100 * f, 100 * wb_f1, 100 * aupr))
             metrics_output_test[key]['acc'].append(acc)
             metrics_output_test[key]['ma_f1'].append(ma_f1)
             metrics_output_test[key]['mi_f1'].append(mi_f1)
@@ -551,7 +628,13 @@ if __name__ == "__main__":
             metrics_output_test[key]['b_p'].append(b_p)
             metrics_output_test[key]['b_r'].append(b_r)
             metrics_output_test[key]['w_f1'].append(wb_f1)
-            f1 = b_f1
+            metrics_output_test[key]['p'].append(p)
+            metrics_output_test[key]['r'].append(r)
+            metrics_output_test[key]['f1'].append(f)
+            metrics_output_test[key]['mcc'].append(mcc)
+            metrics_output_test[key]['roc'].append(roc)
+            metrics_output_test[key]['aupr'].append(aupr)
+            f1 = f
             if f1 > best_f1:
                 best_f1 = f1
                 best_model_weights = model.state_dict().copy()
@@ -567,9 +650,5 @@ if __name__ == "__main__":
     with open(output_path + "/LoRA_ProtGO_esm2_t30_150M_UR50D_multi_classification.txt", 'w') as file_prec:
         for key in metrics_output_test.keys():
             for i in range(epoch_num):
-                file_prec.write(
-                    "{} Epoch={}; Val Accuracy={}; Val Precision={}; Val Recall ={}; Val F1={}; Val macro-F1={}; Val micro-F1={}; Val weight-F1={}\n".
-                    format(key, i + 1, metrics_output_test[key]['acc'][i], metrics_output_test[key]['b_p'][i],
-                           metrics_output_test[key]['b_r'][i], metrics_output_test[key]['b_f1'][i],
-                           metrics_output_test[key]['ma_f1'][i], metrics_output_test[key]['mi_f1'][i],
-                           metrics_output_test[key]['w_f1'][i]))
+                file_prec.write("{} Epoch={}; Val Accuracy={}; Val Precision={}; Val Recall ={}; Val F1={}; Val macro-F1={}; Val micro-F1={}; Val weight-F1={}; Val avg-precision={}; Val avg-recall={}; Val avg-F1={}; Val AUC={}; Val MCC={}; Val AUPR={}\n".
+                                format(key, i+1, metrics_output_test[key]['acc'][i], metrics_output_test[key]['b_p'][i], metrics_output_test[key]['b_r'][i], metrics_output_test[key]['b_f1'][i], metrics_output_test[key]['ma_f1'][i], metrics_output_test[key]['mi_f1'][i], metrics_output_test[key]['w_f1'][i], metrics_output_test[key]['p'][i], metrics_output_test[key]['r'][i], metrics_output_test[key]['f1'][i], metrics_output_test[key]['roc'][i], metrics_output_test[key]['mcc'][i], metrics_output_test[key]['aupr'][i]))

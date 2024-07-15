@@ -166,12 +166,14 @@ class MultimodalTransformer(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(self.transformer_layers, num_layers=num_layers)
         self.text_pos_encoder = PositionalEncoding(text_embed.size()[0], hidden_dim)
         self.protein_pos_encoder = PositionalEncoding(protein_embed.size()[0], hidden_dim)
+        self.dropout = nn.Dropout(p=0.3)
 
     def forward(self, text_inputs, protein_inputs):
-        # text_features = self.text_pos_encoder(self.text_embed)
-        protein_features = self.protein_pos_encoder(self.protein_embed)
+        text_features = self.text_pos_encoder(text_inputs)
+        protein_features = self.protein_pos_encoder(protein_inputs)
+        text_features = self.dropout(text_features)
         # import pdb; pdb.set_trace()
-        combined_features = torch.cat((self.text_embed, protein_features), dim=0)
+        combined_features = torch.cat((text_features, protein_features), dim=0)
         attn_output, _ = self.multihead_attn(combined_features, combined_features, combined_features)
         transformer_output = self.transformer_encoder(attn_output)
         return transformer_output
