@@ -431,8 +431,9 @@ def nlp_embedding(nlp_model, label_list, key, top_list):
                     #     context = context + ' ' + tag_contents[0]
                     tag_context = ont.terms_dict[_tag]['name']
                     context = context + tag_context + ' '
-        if len(context) > MAXLEN:
-            context = context[:MAXLEN]
+        max_len = MAXLEN // 2
+        if len(context) > max_len:
+            context = context[:max_len]
         seq_len = 512
         num_seqs = len(context) // seq_len + (1 if len(context) % seq_len != 0 else 0)
         last_embed = []
